@@ -1,5 +1,6 @@
 from math import floor, log, pi
 from typing import Any, List, Optional, Sequence, Tuple, Union
+from packaging import version
 
 import torch
 import torch.nn as nn
@@ -7,6 +8,8 @@ from einops import rearrange, reduce, repeat
 from einops.layers.torch import Rearrange
 from einops_exts import rearrange_many
 from torch import Tensor, einsum
+from torch.backends.cuda import sdp_kernel
+from torch.nn import functional as F
 
 from .utils import closest_power_2, default, exists, groupby
 
@@ -347,19 +350,27 @@ class AttentionBase(nn.Module):
                 num_heads=num_heads,
             )
 
+        self.use_flash = version.parse(torch.__version__) >= version.parse('2.0.0') and not use_rel_pos
+
         self.to_out = nn.Linear(in_features=mid_features, out_features=features)
 
     def forward(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
         # Split heads
         q, k, v = rearrange_many((q, k, v), "b n (h d) -> b h n d", h=self.num_heads)
-        # Compute similarity matrix
-        sim = einsum("... n d, ... m d -> ... n m", q, k)
-        sim = (sim + self.rel_pos(*sim.shape[-2:])) if self.use_rel_pos else sim
-        sim = sim * self.scale
-        # Get attention matrix with softmax
-        attn = sim.softmax(dim=-1)
-        # Compute values
-        out = einsum("... n m, ... m d -> ... n d", attn, v)
+        
+        if not self.use_flash:
+            # Compute similarity matrix
+            sim = einsum("... n d, ... m d -> ... n m", q, k)
+            sim = (sim + self.rel_pos(*sim.shape[-2:])) if self.use_rel_pos else sim
+            sim = sim * self.scale
+            # Get attention matrix with softmax
+            attn = sim.softmax(dim=-1)
+            # Compute values
+            out = einsum("... n m, ... m d -> ... n d", attn, v)
+        else:
+            with sdp_kernel(enable_flash = True, enable_math=False, enable_mem_efficient= False):
+                out = F.scale_dot_product_attention(q, k, v, is_causal=False, scale=self.scale)
+        
         out = rearrange(out, "b h n d -> b n (h d)")
         return self.to_out(out)
 
