@@ -369,7 +369,7 @@ class AttentionBase(nn.Module):
             out = einsum("... n m, ... m d -> ... n d", attn, v)
         else:
             with sdp_kernel(enable_flash = True, enable_math=False, enable_mem_efficient= False):
-                out = F.scale_dot_product_attention(q, k, v, is_causal=False, scale=self.scale)
+                out = F.scaled_dot_product_attention(q, k, v, is_causal=False)
         
         out = rearrange(out, "b h n d -> b n (h d)")
         return self.to_out(out)
