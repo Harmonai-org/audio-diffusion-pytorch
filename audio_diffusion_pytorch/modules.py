@@ -314,7 +314,7 @@ class AttentionBase(nn.Module):
         out_features = default(out_features, features)
 
         self.to_out = nn.Linear(
-            in_features=mid_features, out_features=out_features, bias=False
+            in_features=mid_features, out_features=out_features
         )
 
         self.use_flash = version.parse(torch.__version__) >= version.parse('2.0.0')
