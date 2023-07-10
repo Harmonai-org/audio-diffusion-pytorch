@@ -606,9 +606,11 @@ class DownsampleBlock1d(nn.Module):
         if self.use_transformer:
             assert (
                 exists(attention_heads)
-                and exists(attention_features)
                 and exists(attention_multiplier)
             )
+
+            attention_features = default(attention_features, channels // attention_heads)
+
             self.transformer = Transformer1d(
                 num_layers=num_transformer_blocks,
                 channels=channels,
@@ -711,9 +713,11 @@ class UpsampleBlock1d(nn.Module):
         if self.use_transformer:
             assert (
                 exists(attention_heads)
-                and exists(attention_features)
                 and exists(attention_multiplier)
             )
+
+            attention_features = default(attention_features, channels // attention_heads)
+
             self.transformer = Transformer1d(
                 num_layers=num_transformer_blocks,
                 channels=channels,
@@ -800,9 +804,11 @@ class BottleneckBlock1d(nn.Module):
         if self.use_transformer:
             assert (
                 exists(attention_heads)
-                and exists(attention_features)
                 and exists(attention_multiplier)
             )
+
+            attention_features = default(attention_features, channels // attention_heads)
+
             self.transformer = Transformer1d(
                 num_layers=num_transformer_blocks,
                 channels=channels,
@@ -1147,6 +1153,9 @@ class UNetCFG1d(UNet1d):
         embedding_mask: Optional[Tensor] = None,
         embedding_scale: float = 1.0,
         embedding_mask_proba: float = 0.0,
+        batch_cfg: bool = False,
+        scale_cfg: bool = False,
+        scale_phi: float = 0.7,
         **kwargs,
     ) -> Tensor:
         b, device = embedding.shape[0], embedding.device
@@ -1160,11 +1169,35 @@ class UNetCFG1d(UNet1d):
             embedding = torch.where(batch_mask, fixed_embedding, embedding)
 
         if embedding_scale != 1.0:
-            # Compute both normal and fixed embedding outputs
-            out = super().forward(x, time, embedding=embedding, embedding_mask=embedding_mask, **kwargs)
-            out_masked = super().forward(x, time, embedding=fixed_embedding, embedding_mask=embedding_mask, **kwargs)
-            # Scale conditional output using classifier-free guidance
-            return out_masked + (out - out_masked) * embedding_scale
+            if batch_cfg:
+                batch_x = torch.cat([x, x], dim=0)
+                batch_time = torch.cat([time, time], dim=0)
+                batch_embed = torch.cat([embedding, fixed_embedding], dim=0)
+                batch_mask = None
+                if embedding_mask is not None:
+                    batch_mask = torch.cat([embedding_mask, embedding_mask], dim=0)
+                # Compute both normal and fixed embedding outputs
+                batch_out = super().forward(batch_x, batch_time, embedding=batch_embed, embedding_mask=batch_mask, **kwargs)
+                out, out_masked = batch_out.chunk(2, dim=0)
+           
+            else:
+                # Compute both normal and fixed embedding outputs
+                out = super().forward(x, time, embedding=embedding, embedding_mask=embedding_mask, **kwargs)
+                out_masked = super().forward(x, time, embedding=fixed_embedding, embedding_mask=embedding_mask, **kwargs)
+
+            out_cfg = out_masked + (out - out_masked) * embedding_scale
+
+            if scale_cfg:
+
+                out_std = out.std(dim=1, keepdim=True)
+                out_cfg_std = out_cfg.std(dim=1, keepdim=True)
+
+                return scale_phi * (out_cfg * (out_std/out_cfg_std)) + (1-scale_phi) * out_cfg
+
+            else:
+
+                return out_cfg
+                
         else:
             return super().forward(x, time, embedding=embedding, embedding_mask=embedding_mask, **kwargs)
 
