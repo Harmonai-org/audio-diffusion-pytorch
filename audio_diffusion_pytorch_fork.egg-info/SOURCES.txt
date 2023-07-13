@@ -1,0 +1,14 @@
+LICENSE
+README.md
+pyproject.toml
+setup.py
+audio_diffusion_pytorch_fork/__init__.py
+audio_diffusion_pytorch_fork/diffusion.py
+audio_diffusion_pytorch_fork/model.py
+audio_diffusion_pytorch_fork/modules.py
+audio_diffusion_pytorch_fork/utils.py
+audio_diffusion_pytorch_fork.egg-info/PKG-INFO
+audio_diffusion_pytorch_fork.egg-info/SOURCES.txt
+audio_diffusion_pytorch_fork.egg-info/dependency_links.txt
+audio_diffusion_pytorch_fork.egg-info/requires.txt
+audio_diffusion_pytorch_fork.egg-info/top_level.txt

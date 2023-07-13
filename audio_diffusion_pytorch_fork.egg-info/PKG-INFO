@@ -1,0 +1,15 @@
+Metadata-Version: 2.1
+Name: audio-diffusion-pytorch-fork
+Version: 0.0.101
+Summary: A fork of Flavio Schneider's Audio Diffusion - PyTorch
+Home-page: https://github.com/harmonai-org/audio-diffusion-pytorch-fork
+Author: Harmonai
+License: MIT
+Keywords: artificial intelligence,deep learning,audio generation
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3.6
+Description-Content-Type: text/markdown
+License-File: LICENSE
