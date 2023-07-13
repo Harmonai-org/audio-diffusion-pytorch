@@ -1,15 +1,14 @@
 from setuptools import find_packages, setup
 
 setup(
-    name="audio-diffusion-pytorch",
+    name="audio-diffusion-pytorch-fork",
     packages=find_packages(exclude=[]),
     version="0.0.101",
     license="MIT",
-    description="Audio Diffusion - PyTorch",
+    description="A fork of Flavio Schneider's Audio Diffusion - PyTorch",
     long_description_content_type="text/markdown",
-    author="Flavio Schneider",
-    author_email="archinetai@protonmail.com",
-    url="https://github.com/archinetai/audio-diffusion-pytorch",
+    author="Harmonai",
+    url="https://github.com/harmonai-org/audio-diffusion-pytorch-fork",
     keywords=["artificial intelligence", "deep learning", "audio generation"],
     install_requires=[
         "tqdm",
