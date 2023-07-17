@@ -1178,8 +1178,8 @@ class UNetCFG1d(UNet1d):
                     batch_mask = torch.cat([embedding_mask, embedding_mask], dim=0)
 
                 batch_features = None
+                features = kwargs.pop("features", None)
                 if self.use_context_features:
-                    features = kwargs.pop("features")
                     batch_features = torch.cat([features, features], dim=0)
 
                 # Compute both normal and fixed embedding outputs

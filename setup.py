@@ -3,7 +3,7 @@ from setuptools import find_packages, setup
 setup(
     name="audio-diffusion-pytorch-fork",
     packages=find_packages(exclude=[]),
-    version="0.0.102",
+    version="0.0.103",
     license="MIT",
     description="A fork of Flavio Schneider's Audio Diffusion - PyTorch",
     long_description_content_type="text/markdown",
