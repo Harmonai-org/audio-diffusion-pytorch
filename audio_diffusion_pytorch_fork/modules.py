@@ -317,7 +317,19 @@ class AttentionBase(nn.Module):
             in_features=mid_features, out_features=out_features
         )
 
-        self.use_flash = version.parse(torch.__version__) >= version.parse('2.0.0')
+        self.use_flash = torch.cuda.is_available() and version.parse(torch.__version__) >= version.parse('2.0.0')
+
+        if not self.use_flash:
+            return
+
+        device_properties = torch.cuda.get_device_properties(torch.device('cuda'))
+
+        if device_properties.major == 8 and device_properties.minor == 0:
+            # Use flash attention for A100 GPUs
+            self.sdp_kernel_config = (True, False, False)
+        else:
+            # Don't use flash attention for other GPUs
+            self.sdp_kernel_config = (False, True, True)
 
     def forward(
         self, q: Tensor, k: Tensor, v: Tensor, mask: Optional[Tensor] = None
@@ -336,7 +348,7 @@ class AttentionBase(nn.Module):
             # Compute values
             out = einsum("... n m, ... m d -> ... n d", attn, v)
         else:
-            with sdp_kernel(enable_flash = True, enable_math=False, enable_mem_efficient= False):
+            with sdp_kernel(*self.sdp_kernel_config):
                 out = F.scaled_dot_product_attention(q, k, v, is_causal=False)
 
         out = rearrange(out, "b h n d -> b n (h d)")
@@ -1182,8 +1194,15 @@ class UNetCFG1d(UNet1d):
                 if self.use_context_features:
                     batch_features = torch.cat([features, features], dim=0)
 
+                batch_channels = None
+                channels_list = kwargs.pop("channels_list", None)
+                if self.use_context_channels:
+                    batch_channels = []
+                    for channels in channels_list:
+                        batch_channels += [torch.cat([channels, channels], dim=0)]
+
                 # Compute both normal and fixed embedding outputs
-                batch_out = super().forward(batch_x, batch_time, embedding=batch_embed, embedding_mask=batch_mask, features=batch_features, **kwargs)
+                batch_out = super().forward(batch_x, batch_time, embedding=batch_embed, embedding_mask=batch_mask, features=batch_features, channels_list=batch_channels, **kwargs)
                 out, out_masked = batch_out.chunk(2, dim=0)
            
             else:
