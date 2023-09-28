@@ -297,6 +297,11 @@ def add_mask(sim: Tensor, mask: Tensor) -> Tensor:
     sim = sim.masked_fill(~mask, max_neg_value)
     return sim
 
+def causal_mask(q: Tensor, k: Tensor) -> Tensor:
+    b, i, j, device = q.shape[0], q.shape[-2], k.shape[-2], q.device
+    mask = ~torch.ones((i, j), dtype=torch.bool, device=device).triu(j - i + 1)
+    mask = repeat(mask, "n m -> b n m", b=b)
+    return mask
 
 class AttentionBase(nn.Module):
     def __init__(
@@ -332,12 +337,16 @@ class AttentionBase(nn.Module):
             self.sdp_kernel_config = (False, True, True)
 
     def forward(
-        self, q: Tensor, k: Tensor, v: Tensor, mask: Optional[Tensor] = None
+        self, q: Tensor, k: Tensor, v: Tensor, mask: Optional[Tensor] = None, is_causal: bool = False
     ) -> Tensor:
         # Split heads
         q, k, v = rearrange_many((q, k, v), "b n (h d) -> b h n d", h=self.num_heads)
 
         if not self.use_flash:
+            if is_causal and not mask:
+                # Mask out future tokens for causal attention
+                mask = causal_mask(q, k)
+
             # Compute similarity matrix and add eventual mask
             sim = einsum("... n d, ... m d -> ... n m", q, k) * self.scale
             sim = add_mask(sim, mask) if exists(mask) else sim
@@ -349,7 +358,7 @@ class AttentionBase(nn.Module):
             out = einsum("... n m, ... m d -> ... n d", attn, v)
         else:
             with sdp_kernel(*self.sdp_kernel_config):
-                out = F.scaled_dot_product_attention(q, k, v, is_causal=False)
+                out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, is_causal=is_causal)
 
         out = rearrange(out, "b h n d -> b n (h d)")
         return self.to_out(out)
@@ -390,7 +399,8 @@ class Attention(nn.Module):
         self,
         x: Tensor, # [b, n, c]
         context: Optional[Tensor] = None, # [b, m, d]
-        context_mask: Optional[Tensor] = None,  # [b, m], false is masked
+        context_mask: Optional[Tensor] = None,  # [b, m], false is masked,
+        causal: Optional[bool] = False,
     ) -> Tensor:
         assert_message = "You must provide a context when using context_features"
         assert not self.context_features or exists(context), assert_message
@@ -407,7 +417,7 @@ class Attention(nn.Module):
             k, v = k * mask, v * mask
 
         # Compute and return attention
-        return self.attention(q, k, v)
+        return self.attention(q, k, v, is_causal=self.causal or causal)
 
 
 def FeedForward(features: int, multiplier: int) -> nn.Module:
@@ -452,8 +462,8 @@ class TransformerBlock(nn.Module):
 
         self.feed_forward = FeedForward(features=features, multiplier=multiplier)
 
-    def forward(self, x: Tensor, *, context: Optional[Tensor] = None, context_mask: Optional[Tensor] = None) -> Tensor:
-        x = self.attention(x) + x
+    def forward(self, x: Tensor, *, context: Optional[Tensor] = None, context_mask: Optional[Tensor] = None, causal: Optional[bool] = False) -> Tensor:
+        x = self.attention(x, causal=causal) + x
         if self.use_cross_attention:
             x = self.cross_attention(x, context=context, context_mask=context_mask) + x
         x = self.feed_forward(x) + x
@@ -509,10 +519,10 @@ class Transformer1d(nn.Module):
             ),
         )
 
-    def forward(self, x: Tensor, *, context: Optional[Tensor] = None, context_mask: Optional[Tensor] = None) -> Tensor:
+    def forward(self, x: Tensor, *, context: Optional[Tensor] = None, context_mask: Optional[Tensor] = None, causal=False) -> Tensor:
         x = self.to_in(x)
         for block in self.blocks:
-            x = block(x, context=context, context_mask=context_mask)
+            x = block(x, context=context, context_mask=context_mask, causal=causal)
         x = self.to_out(x)
         return x
 
@@ -649,6 +659,7 @@ class DownsampleBlock1d(nn.Module):
         channels: Optional[Tensor] = None,
         embedding: Optional[Tensor] = None,
         embedding_mask: Optional[Tensor] = None,
+        causal: Optional[bool] = False
     ) -> Union[Tuple[Tensor, List[Tensor]], Tensor]:
 
         if self.use_pre_downsample:
@@ -663,7 +674,7 @@ class DownsampleBlock1d(nn.Module):
             skips += [x] if self.use_skip else []
 
         if self.use_transformer:
-            x = self.transformer(x, context=embedding, context_mask=embedding_mask)
+            x = self.transformer(x, context=embedding, context_mask=embedding_mask, causal=causal)
             skips += [x] if self.use_skip else []
 
         if not self.use_pre_downsample:
@@ -766,6 +777,7 @@ class UpsampleBlock1d(nn.Module):
         mapping: Optional[Tensor] = None,
         embedding: Optional[Tensor] = None,
         embedding_mask: Optional[Tensor] = None,
+        causal: Optional[bool] = False
     ) -> Union[Tuple[Tensor, Tensor], Tensor]:
 
         if self.use_pre_upsample:
@@ -776,7 +788,7 @@ class UpsampleBlock1d(nn.Module):
             x = block(x, mapping=mapping)
 
         if self.use_transformer:
-            x = self.transformer(x, context=embedding, context_mask=embedding_mask)
+            x = self.transformer(x, context=embedding, context_mask=embedding_mask, causal=causal)
 
         if not self.use_pre_upsample:
             x = self.upsample(x)
@@ -845,10 +857,11 @@ class BottleneckBlock1d(nn.Module):
         mapping: Optional[Tensor] = None,
         embedding: Optional[Tensor] = None,
         embedding_mask: Optional[Tensor] = None,
+        causal: Optional[bool] = False
     ) -> Tensor:
         x = self.pre_block(x, mapping=mapping)
         if self.use_transformer:
-            x = self.transformer(x, context=embedding, context_mask=embedding_mask)
+            x = self.transformer(x, context=embedding, context_mask=embedding_mask, causal=causal)
         x = self.post_block(x, mapping=mapping)
         return x
 
@@ -1080,6 +1093,7 @@ class UNet1d(nn.Module):
         channels_list: Optional[Sequence[Tensor]] = None,
         embedding: Optional[Tensor] = None,
         embedding_mask: Optional[Tensor] = None,
+        causal: Optional[bool] = False,
     ) -> Tensor:
         channels = self.get_channels(channels_list, layer=0)
         # Apply stft if required
@@ -1094,15 +1108,15 @@ class UNet1d(nn.Module):
         for i, downsample in enumerate(self.downsamples):
             channels = self.get_channels(channels_list, layer=i + 1)
             x, skips = downsample(
-                x, mapping=mapping, channels=channels, embedding=embedding, embedding_mask=embedding_mask
+                x, mapping=mapping, channels=channels, embedding=embedding, embedding_mask=embedding_mask, causal=causal
             )
             skips_list += [skips]
 
-        x = self.bottleneck(x, mapping=mapping, embedding=embedding, embedding_mask=embedding_mask)
+        x = self.bottleneck(x, mapping=mapping, embedding=embedding, embedding_mask=embedding_mask, causal=causal)
 
         for i, upsample in enumerate(self.upsamples):
             skips = skips_list.pop()
-            x = upsample(x, skips=skips, mapping=mapping, embedding=embedding, embedding_mask=embedding_mask)
+            x = upsample(x, skips=skips, mapping=mapping, embedding=embedding, embedding_mask=embedding_mask, causal=causal)
 
         x += skips_list.pop()
         x = self.to_out(x, mapping)
@@ -1147,14 +1161,32 @@ class UNetCFG1d(UNet1d):
         self,
         context_embedding_max_length: int,
         context_embedding_features: int,
+        use_xattn_time: bool = False,
         **kwargs,
     ):
         super().__init__(
             context_embedding_features=context_embedding_features, **kwargs
         )
+
+        self.use_xattn_time = use_xattn_time
+
+        if use_xattn_time:
+            assert exists(context_embedding_features)
+            self.to_time_embedding = nn.Sequential(
+                TimePositionalEmbedding(
+                    dim=kwargs["channels"], out_features=context_embedding_features
+                ),
+                nn.GELU(),
+            )
+
+            context_embedding_max_length += 1   # Add one for time embedding
+
         self.fixed_embedding = FixedEmbedding(
             max_length=context_embedding_max_length, features=context_embedding_features
         )
+
+        
+
 
     def forward(  # type: ignore
         self,
@@ -1171,6 +1203,13 @@ class UNetCFG1d(UNet1d):
         **kwargs,
     ) -> Tensor:
         b, device = embedding.shape[0], embedding.device
+
+        if self.use_xattn_time:
+            embedding = torch.cat([embedding, self.to_time_embedding(time).unsqueeze(1)], dim=1)
+
+            if embedding_mask is not None:
+                embedding_mask = torch.cat([embedding_mask, torch.ones((b, 1), device=device)], dim=1)
+
         fixed_embedding = self.fixed_embedding(embedding)
 
         if embedding_mask_proba > 0.0:
